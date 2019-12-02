@@ -15,6 +15,9 @@ wikiart/
 jjjjound/
 *.pem
 
+# runs
+run1/
+
 # mac bullshit
 .DS_Store
 
