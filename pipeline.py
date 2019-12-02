@@ -8,7 +8,7 @@ Image dataset pipeline.
 """
 import numpy as np
 import pandas as pd
-from torch.utils.data import DataLoader
+from torch.utils.data import RandomSampler, DataLoader
 from torchvision import transforms, datasets
 TMEAN = [0.485, 0.456, 0.406]
 TSTD  = [0.229, 0.224, 0.225]
@@ -27,7 +27,8 @@ def build_pipeline(datadir, size=256, n_batch=64, n_workers=2):
     ## image dataset
     images = datasets.ImageFolder(root=datadir, transform=process_patch)
     ## DataLoader
-    kwargs = dict(shuffle=True, batch_size=n_batch, num_workers=n_workers)
+    sample = RandomSampler(images, replacement=True, num_samples=100000)
+    kwargs = dict(sampler=sample, batch_size=n_batch, num_workers=n_workers, drop_last=True)
     pipeline = DataLoader(images, **kwargs)
     ## return pipeline
     return pipeline

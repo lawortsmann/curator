@@ -59,17 +59,12 @@ class UnFlatten(nn.Module):
 
 
 def vae_loss(y, x, mu, logvar):
-    ## reverse normalize batch
-    tm = torch.Tensor([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)
-    ts = torch.Tensor([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)
-    xp = x * ts + tm
     ## Autoencoding error
-    err = F.binary_cross_entropy(y, xp, reduction='mean')
-    # err = F.mse_loss(y, xp, reduction='sum')
+    err = F.mse_loss(y, x, reduction='mean')
     ## Kullback–Leibler divergence of encoding space
-    kld = -0.5 * torch.mean(1 + logvar - mu * mu - logvar.exp())
+    kld = 0.5 * torch.mean(1 + logvar - mu * mu - logvar.exp())
     ## Loss
-    loss = err + kld
+    loss = err - kld
     return loss, err, kld
 
 
@@ -147,6 +142,9 @@ class VAEGAN(nn.Module):
         """
         z = self.fc3(z)
         z = self.decoder(z)
+        tm = torch.Tensor([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)
+        ts = torch.Tensor([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)
+        z = (z - tm) / ts
         return z
 
     def forward(self, x):

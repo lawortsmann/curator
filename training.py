@@ -16,7 +16,8 @@ import torchvision
 from torch import nn
 from torch.autograd import Variable
 import torch.nn.functional as F
-SAVEDIR = "run1/"
+## globals
+SAVEDIR = "run2/"
 
 
 def vae_training(model, pipeline, original=None, verbose=True, n_epochs=64, n_steps=256):
@@ -59,25 +60,26 @@ def vae_training(model, pipeline, original=None, verbose=True, n_epochs=64, n_st
             print( "" )
         ## plot reconstruction
         if original is not None:
-            ## get normalized reconstruction
-            tm = torch.Tensor([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)
-            ts = torch.Tensor([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)
+            ## plot reconstruction
             recong, _, _ = model(original)
-            recong = (recong.detach() - tm) / ts
-            ## plot
             f_n = SAVEDIR + "epoch_%i.png"%epoch
-            fig = plot_batch(recong, size=64, fname=f_n)
+            fig = plot_batch(recong.detach(), size=64, fname=f_n)
+            plt.close()
     ## return model and logs
     logs = pd.DataFrame(logs)
     return model, logs
 
 
 def main():
+    ## set number of threads
+    torch.set_num_threads(10)
+    
     ## get data pipeline
     pipeline = build_pipeline('jjjjound/', size=64)
     for original, _ in pipeline: break
     f_n = SAVEDIR + "original.png"
     fig = plot_batch(original, size=64, fname=f_n)
+    plt.close()
     
     ## setup model
     model = VAEGAN()
@@ -86,7 +88,7 @@ def main():
     model, logs = vae_training(model, pipeline, original=original, verbose=True, n_epochs=64, n_steps=512)
 
     ## save
-    logs.to_csv(SAVEDIR + 'logs.csv')
+    logs.to_csv(SAVEDIR + 'logs.csv', index=False)
     with np.warnings.catch_warnings(record='ignore'):
         torch.save(model, SAVEDIR + 'model.pt')
     return True
