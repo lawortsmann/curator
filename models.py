@@ -35,6 +35,7 @@ For reference:
 @version: 2019-12-01
 @author: lawortsmann
 """
+import numpy as np
 import torch
 import torchvision
 from torch import nn
@@ -74,6 +75,9 @@ class VAEGAN(nn.Module):
     """
     def __init__(self):
         super(VAEGAN, self).__init__()
+        ## normalization of image channels
+        self.norm_m = torch.Tensor([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)
+        self.norm_s = torch.Tensor([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)
         ## VAE encoder
         self.encoder = nn.Sequential(
             nn.Conv2d(3, 32, kernel_size=4, stride=2),
@@ -87,14 +91,15 @@ class VAEGAN(nn.Module):
             Flatten()
         )
         ## VAE bottleneck
-        self.fc1 = nn.Linear(1024, 1024)
-        self.fc2 = nn.Linear(1024, 1024)
-        self.fc3 = nn.Linear(1024, 1024)
+        self.fc_mu = nn.Linear(1024, 1024)
+        self.fc_lv = nn.Linear(1024, 1024)
         ## VAE decoder
         self.decoder = nn.Sequential(
+            nn.Linear(1024, 1024),
             UnFlatten(),
             nn.ConvTranspose2d(1024, 128, kernel_size=4, stride=2),
             nn.ReLU(),
+            nn.BatchNorm2d(128),
             nn.ConvTranspose2d(128, 64, kernel_size=4, stride=4),
             nn.ReLU(),
             nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
@@ -102,6 +107,17 @@ class VAEGAN(nn.Module):
             nn.ConvTranspose2d(32, 3, kernel_size=2, stride=2),
             nn.Sigmoid()
         )
+        ## self portrait
+        params = []
+        for p in self.decoder.parameters():
+            params.append( p.flatten() )
+        params = torch.cat(params)
+        psize = np.sqrt(len(params) / 3.0)
+        psize = 2**int(np.log2(psize))
+        params = params[:(3 * psize * psize)]
+        self.portrait = params.reshape((1, 3, psize, psize))
+        self.portrait = nn.Sigmoid()(self.portrait)
+        self.portrait = (self.portrait - self.norm_m) / self.norm_s
         ## GAN classifier
         self.classifier = torchvision.models.resnet18(pretrained=True)
         ## no gradients
@@ -110,7 +126,11 @@ class VAEGAN(nn.Module):
         ## add classification output layer
         # self.classifier.fc = nn.Linear(2048, n_classes)
         self.classifier.fc = nn.Linear(512, 1)
-
+        ## some other layers which might be useful
+        # nn.MaxPool2d
+        # nn.AvgPool2d
+        # nn.BatchNorm2d
+        
     def reparameterize(self, mu, logvar):
         """
         Sample from encoded space
@@ -124,10 +144,10 @@ class VAEGAN(nn.Module):
         """
         bottleneck layer
         """
-        mu, logvar = self.fc1(h), self.fc2(h)
+        mu, logvar = self.fc_mu(h), self.fc_lv(h)
         z = self.reparameterize(mu, logvar)
         return z, mu, logvar
-
+    
     def encode(self, x):
         """
         Encode pass
@@ -140,11 +160,8 @@ class VAEGAN(nn.Module):
         """
         Decode pass
         """
-        z = self.fc3(z)
         z = self.decoder(z)
-        tm = torch.Tensor([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)
-        ts = torch.Tensor([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)
-        z = (z - tm) / ts
+        z = (z - self.norm_m) / self.norm_s
         return z
 
     def forward(self, x):

@@ -17,7 +17,7 @@ from torch import nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 ## globals
-SAVEDIR = "run2/"
+SAVEDIR = "run3/"
 
 
 def vae_training(model, pipeline, original=None, verbose=True, n_epochs=64, n_steps=256):
@@ -65,6 +65,11 @@ def vae_training(model, pipeline, original=None, verbose=True, n_epochs=64, n_st
             f_n = SAVEDIR + "epoch_%i.png"%epoch
             fig = plot_batch(recong.detach(), size=64, fname=f_n)
             plt.close()
+            ## save portrait
+            portrait = model.norm_s * model.portrait + model.norm_m
+            portrait = np.round(255 * portrait.detach().numpy()).astype(np.uint8)
+            portrait = portrait[0].swapaxes(0, 2).swapaxes(1, 0)
+            plt.imsave(SAVEDIR + "portrait_%i.png"%epoch, portrait)
     ## return model and logs
     logs = pd.DataFrame(logs)
     return model, logs
@@ -85,7 +90,7 @@ def main():
     model = VAEGAN()
 
     ## VAE training...
-    model, logs = vae_training(model, pipeline, original=original, verbose=True, n_epochs=64, n_steps=512)
+    model, logs = vae_training(model, pipeline, original=original, verbose=True, n_epochs=32, n_steps=512)
 
     ## save
     logs.to_csv(SAVEDIR + 'logs.csv', index=False)
