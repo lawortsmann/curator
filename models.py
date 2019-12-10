@@ -59,16 +59,6 @@ class UnFlatten(nn.Module):
         return input.view(input.size(0), size, 1, 1)
 
 
-def vae_loss(y, x, mu, logvar):
-    ## Autoencoding error
-    err = F.mse_loss(y, x, reduction='mean')
-    ## Kullback–Leibler divergence of encoding space
-    kld = 0.5 * torch.mean(1 + logvar - mu * mu - logvar.exp())
-    ## Loss
-    loss = err - kld
-    return loss, err, kld
-
-
 class VAEGAN(nn.Module):
     """
     Variational Autoencoder GAN
@@ -112,17 +102,17 @@ class VAEGAN(nn.Module):
         for p in self.decoder.parameters():
             params.append( p.flatten() )
         params = torch.cat(params)
-        psize = np.sqrt(len(params) / 3.0)
-        psize = 2**int(np.log2(psize))
-        params = params[:(3 * psize * psize)]
-        self.portrait = params.reshape((1, 3, psize, psize))
+        self.psize = np.sqrt(len(params) / 3.0)
+        self.psize = 2**int(np.log2(self.psize))
+        params = params[:(3 * self.psize * self.psize)]
+        self.portrait = params.reshape((1, 3, self.psize, self.psize))
         self.portrait = nn.Sigmoid()(self.portrait)
         self.portrait = (self.portrait - self.norm_m) / self.norm_s
         ## GAN classifier
         self.classifier = torchvision.models.resnet18(pretrained=True)
         ## no gradients
-        for p in self.classifier.parameters():
-            p.requires_grad = False
+        # for p in self.classifier.parameters():
+        #     p.requires_grad = False
         ## add classification output layer
         # self.classifier.fc = nn.Linear(2048, n_classes)
         self.classifier.fc = nn.Linear(512, 1)
@@ -130,7 +120,7 @@ class VAEGAN(nn.Module):
         # nn.MaxPool2d
         # nn.AvgPool2d
         # nn.BatchNorm2d
-        
+
     def reparameterize(self, mu, logvar):
         """
         Sample from encoded space
@@ -147,7 +137,7 @@ class VAEGAN(nn.Module):
         mu, logvar = self.fc_mu(h), self.fc_lv(h)
         z = self.reparameterize(mu, logvar)
         return z, mu, logvar
-    
+
     def encode(self, x):
         """
         Encode pass
@@ -163,6 +153,23 @@ class VAEGAN(nn.Module):
         z = self.decoder(z)
         z = (z - self.norm_m) / self.norm_s
         return z
+
+    def sample_portrait(self, n=64, size=64):
+        """
+        Sample portrait
+        """
+        affine = torch.rand(n, 2) - 0.5
+        resize = (torch.rand(n) + 0.25) / 1.25
+        resize = resize * (1 - torch.norm(affine, dim=1))
+        theta  = torch.zeros((n, 2, 3))
+        theta[:, 0, 0] = resize
+        theta[:, 1, 1] = resize
+        theta[:, 0, 2] = affine[:, 0]
+        theta[:, 1, 2] = affine[:, 1]
+        grid = F.affine_grid(theta, size=(n, 3, size, size), align_corners=True)
+        crop = torch.repeat_interleave(self.portrait, n, dim=0)
+        crop = F.grid_sample(crop, grid, align_corners=True)
+        return crop
 
     def forward(self, x):
         """

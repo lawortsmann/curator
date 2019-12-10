@@ -9,7 +9,7 @@ import pandas as pd
 from sys import stdout
 import matplotlib.pyplot as plt
 from pipeline import build_pipeline, plot_batch
-from models import VAEGAN, vae_loss
+from models import VAEGAN
 ## pytorch
 import torch
 import torchvision
@@ -17,7 +17,32 @@ from torch import nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 ## globals
-SAVEDIR = "run3/"
+SAVEDIR = "run0/"
+
+
+def vae_loss(y, x, mu, logvar):
+    ## Autoencoding error
+    err = F.mse_loss(y, x, reduction='mean')
+    ## Kullback–Leibler divergence of encoding space
+    kld = 0.5 * torch.mean(1 + logvar - mu * mu - logvar.exp())
+    ## Loss
+    loss = err - kld
+    return loss
+
+
+def gan_loss(p_x, p_y):
+    c_x = torch.ones(p_x.shape)
+    c_y = torch.zeros(p_y.shape)
+    l_x = F.binary_cross_entropy_with_logits(p_x, c_x, reduction='mean')
+    l_y = F.binary_cross_entropy_with_logits(p_y, c_y, reduction='mean')
+    loss = (l_x + l_y) / 2.0
+    return loss
+
+
+def reg_loss(p_p):
+    c_p = torch.ones(p_p.shape)
+    l_p = F.binary_cross_entropy_with_logits(p_p, c_p, reduction='mean')
+    return l_p
 
 
 def vae_training(model, pipeline, original=None, verbose=True, n_epochs=64, n_steps=256):
@@ -27,25 +52,34 @@ def vae_training(model, pipeline, original=None, verbose=True, n_epochs=64, n_st
     logs = []
     message = "Epoch %i [%s%s] %i/%i\r"
     for epoch in range(n_epochs):
-        for i, (batch, _) in enumerate(pipeline):
+        for i, (x, _) in enumerate(pipeline):
             ## done with epoch
             if i >= n_steps:
                 break
             ## forward pass
-            y, mu, logvar = model(batch)
-            ## evaluate loss function
-            loss, err, kld = vae_loss(y, batch, mu, logvar)
+            y, mu, logvar = model(x)
+            p = model.sample_portrait()
+            ## evaluate classifier
+            p_x = model.classifier(x)
+            p_y = model.classifier(y)
+            p_p = model.classifier(p)
+            ## evaluate loss functions
+            l_v = vae_loss(y, x, mu, logvar)
+            l_g = gan_loss(p_x, p_y)
+            l_p = reg_loss(p_p)
+            loss = l_v + l_g - l_p
             ## step optimizer
             optimizer.zero_grad()
-            loss.backward()
+            loss.backward(retain_graph=True)
             optimizer.step()
             ## store for logging
             logs.append({
                 'epoch': epoch,
                 'batch': i,
                 'loss': float(loss),
-                'err':  float(err),
-                'kld':  float(kld)
+                'loss_vae': float(l_v),
+                'loss_gan': float(l_g),
+                'loss_reg': float(l_p),
             })
             ## verbose logging
             if verbose:
@@ -78,14 +112,14 @@ def vae_training(model, pipeline, original=None, verbose=True, n_epochs=64, n_st
 def main():
     ## set number of threads
     torch.set_num_threads(10)
-    
+
     ## get data pipeline
     pipeline = build_pipeline('jjjjound/', size=64)
     for original, _ in pipeline: break
     f_n = SAVEDIR + "original.png"
     fig = plot_batch(original, size=64, fname=f_n)
     plt.close()
-    
+
     ## setup model
     model = VAEGAN()
 
