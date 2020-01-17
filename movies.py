@@ -3,7 +3,7 @@
 """
 A simple RNN for modeling movie scripts.
 
-@version: 2020-01-15
+@version: 2020-01-16
 @author: lawortsmann
 """
 import numpy as np
@@ -11,7 +11,7 @@ import pandas as pd
 from six.moves.urllib import request
 from sys import stdout
 from time import sleep
-import os, re
+import json, os, re
 import torch
 from torch import nn
 
@@ -86,55 +86,78 @@ def load_scripts(data_dir='scripts/', tokenize=True):
     return dataset
 
 
-def build_vocab(dataset, min_count=1):
+def build_vocab(dataset, term_freq=2, doc_freq=2, missing_token='<m>'):
     """
-    Build Vocabulary
+    Build the vocabulary from the document dataset
     """
-    vocab, counts = np.unique(sum(dataset.values(), []), return_counts=True)
-    vocab = vocab[counts >= min_count]
+    ## loop over documents to build full vocabulary
+    full_vocab = dict()
+    for i, (key, val) in enumerate(dataset.items()):
+        w, c = np.unique(val, return_counts=True)
+        full_vocab[key] = pd.Series(c, index=w)
+    full_vocab = pd.DataFrame(full_vocab)
+    full_vocab = full_vocab.fillna(0).astype(int)
+    ## filter vocabulary
+    g = (np.sum(full_vocab, axis=1) >= term_freq)
+    g = g & (np.sum(full_vocab > 0, axis=1) >= doc_freq)
+    vocab = 1 * full_vocab[g]
+    ## count missing
+    if missing_token is not None:
+        vocab.loc[missing_token] = np.sum(full_vocab[~g], axis=0)
+    ## compute frequency weights
+    weights = np.sum(vocab, axis=1).sort_values(ascending=False)
+    weights = 1 / (1 + weights)
+    weights = weights / np.mean(weights)
+    ## build index and lookup
+    vocab = 1 * vocab.loc[weights.index]
     index = np.arange(len(vocab))
-    vocab = pd.Series(index, index=vocab)
-    res = dict()
-    for key, val in dataset.items():
-        idx = vocab.reindex(val, fill_value=-1)
-        res[key] = np.array(idx, dtype=int)
-    return vocab, res
+    index = pd.Series(index, index=vocab.index)
+    lookup = pd.Series(index.index, index=index.values)
+    return vocab, weights, index, lookup
 
 
-def corpus_invfreq(dataset, sqrt=True):
+def build_corpus(dataset, index, missing_token='<m>'):
     """
-    Inverse frequency weights
+    Build the corpus from an index and a document dataset
     """
-    corpus = np.concatenate(list(dataset.values()))
-    corpus = corpus[corpus >= 0]
-    ix, ct = np.unique(corpus, return_counts=True)
-    w = np.ones(max(corpus) + 1)
-    if sqrt:
-        w[ix] = np.sqrt(np.mean(ct) / ct)
+    ## get missing token
+    if missing_token in index:
+        na_ix = index[missing_token]
     else:
-        w[ix] = np.mean(ct) / ct
-    w = w / np.mean(w)
-    return w
+        na_ix = -1
+    ## build corpus
+    corpus = dict()
+    for i, (key, val) in enumerate(dataset.items()):
+        ix = index.reindex(val, fill_value=na_ix)
+        ix = np.array(ix, dtype=int)
+        ix = ix[ix >= 0]
+        if len(ix) >= 16:
+            corpus[key] = ix
+    return corpus
 
 
-def dataset_generator(dataset, n_batch=64, n_seq=256):
+def build_pipeline(corpus, n_seq=32, n_batch=1024):
     """
-    Build the dataset pipeline
+    Build the training pipeline
     """
+    ## get lengths
+    lengths = pd.Series({key: len(val) for key, val in corpus.items()})
+    L = np.array(lengths, dtype=int)
+    ## shape corpus into rectangular array
+    n_docs = len(corpus)
+    X = np.zeros((n_docs, max(lengths)), dtype=int)
+    for i, (key, j) in enumerate(lengths.iteritems()):
+        X[i, :j] = corpus[key]
+    ## get sequence indexer
     seq = n_seq - np.arange(n_seq)
-    keys = list(dataset.keys())
+    ## continuously yield batches
     while True:
-        docs = np.random.choice(keys, size=n_batch)
-        x = np.zeros((n_seq, n_batch), dtype=int)
-        y = np.zeros(n_batch, dtype=int)
-        for i, doc in enumerate(docs):
-            idx = dataset[doc]
-            idx = idx[idx >= 0]
-            jx = np.random.randint(low=n_seq, high=len(idx))
-            ix = jx - seq
-            x[:, i] = idx[ix]
-            y[i] = idx[jx]
-        yield docs, x, y
+        ix = np.random.choice(n_docs, size=n_batch)
+        jx = np.random.uniform(low=n_seq, high=L[ix])
+        jx = np.array(jx, dtype=int)
+        x_i = X[ix, jx - seq[:, None]]
+        y_i = X[ix, jx]
+        yield ix, x_i, y_i
     return True
 
 ## Simple RNN model
@@ -172,7 +195,7 @@ class SimpleRNN(nn.Module):
         return z
 
 
-def training(model, pipeline, w=None, lr=0.01, n_epochs=32, n_steps=64, verbose=True):
+def training(model, pipeline, weights, lr=0.01, n_epochs=32, n_steps=64, verbose=True):
     """
     Training...
     """
@@ -181,15 +204,12 @@ def training(model, pipeline, w=None, lr=0.01, n_epochs=32, n_steps=64, verbose=
     ## initialize optimizer
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     ## initialize loss function
-    if w is None:
-        nll_loss = nn.NLLLoss()
-    else:
-        w = torch.tensor( np.array(w, dtype=np.float32) )
-        nll_loss = nn.NLLLoss(weight=w)
+    w = torch.tensor( np.array(weights, dtype=np.float32) )
+    nll_loss = nn.NLLLoss(weight=w)
     ## training loop
     logs, message = [], "Epoch %i [%s%s] %0.4f \r"
     for epoch in range(n_epochs):
-        for i, (docs, x, y) in enumerate(pipeline):
+        for i, (d, x, y) in enumerate(pipeline):
             ## convert to tensors
             x = torch.tensor(x)
             y = torch.tensor(y)
@@ -227,14 +247,20 @@ def training(model, pipeline, w=None, lr=0.01, n_epochs=32, n_steps=64, verbose=
     return logs
 
 
-def save_model(model, logs, save_dir='movie_run/'):
-    ## save logs
-    logs = pd.DataFrame(logs)
-    logs.to_csv(save_dir + 'logs.csv', index=False)
+def save_model(vocab, model, metadata, logs, save_dir='movie_run/'):
+    ## save vocab
+    vocab = pd.DataFrame(vocab)
+    vocab.to_csv(save_dir + 'vocab.csv')
     ## save model
     with np.warnings.catch_warnings(record='ignore'):
         torch.save(model, save_dir + 'model.pt')
-    return True
+    ## save metadata
+    with open(save_dir + 'metadata.json', 'w'):
+        json.dump(metadata, file)
+    ## save logs
+    logs = pd.DataFrame(logs)
+    logs.to_csv(save_dir + 'logs.csv', index=False)
+    return save_dir
 
 
 if __name__ == "__main__":
@@ -242,28 +268,66 @@ if __name__ == "__main__":
     np.warnings.simplefilter(action='ignore')
     
     ## arguments
-    parser = ArgumentParser(description="Run the Simple RNN Model")
+    parser = ArgumentParser(description="Simple RNN Model for Text Prediction")
+    parser.add_argument('--term_freq', metavar='', type=int, default=32, help='minimum term count')
+    parser.add_argument('--doc_freq', metavar='', type=int, default=4, help='minimum doc count')
+    parser.add_argument('--data-dir', metavar='', type=str, default='scripts/', help='data directory')
+    parser.add_argument('--save-dir', metavar='', type=str, default='movie_run/', help='save directory')
+    parser.add_argument('--embed', metavar='', type=int, default=256, help='embedding dimension')
+    parser.add_argument('--hidden', metavar='', type=int, default=256, help='hidden dimension')
+    parser.add_argument('--layers', metavar='', type=int, default=4, help='number of layers')
+    parser.add_argument('--dropout', metavar='', type=float, default=0.05, help='dropout rate between layers')
+    parser.add_argument('--learning-rate', metavar='', type=float, default=1.0, help='learning rate')
+    parser.add_argument('--seq', metavar='', type=int, default=32, help='sequence length')
+    parser.add_argument('--batch', metavar='', type=int, default=1024, help='batch size')
+    parser.add_argument('--steps', metavar='', type=int, default=256, help='steps per epoch')
+    parser.add_argument('--epochs', metavar='', type=int, default=32, help='number of epochs')    
+    parser.add_argument('--missing', action='store_true', default=False, help='use a missing token')
     parser.add_argument('--verbose', action='store_true', default=False, help='display status')
     args = parser.parse_args()
     
-    ## import data
-    scripts = pd.read_csv('scripts.csv')
-    scripts = list(scripts['name'])
-    import_scripts(scripts, data_dir="scripts/")
+    if args.missing:
+        missing_token = '<m>'
+    else:
+        missing_token = None
     
-    ## load data
-    scripts = load_scripts(data_dir='scripts/', tokenize=True)
-    vocab, dataset = build_vocab(scripts, min_count=10)
-    pipeline = dataset_generator(dataset, n_batch=1024, n_seq=32)
-    print( "using %i scripts"%len(scripts) )
-    print( "vocab size: %i"%len(vocab) )
+    print( "Loading Dataset..." )
+    ## load data and build vocabulary
+    scripts = load_scripts(args.data_dir, tokenize=True)
+    vocab, weights, index, lookup = build_vocab(scripts, args.term_freq, args.doc_freq, missing_token)
+    ## build corpus
+    corpus = build_corpus(scripts, index, missing_token)
+    ## build training pipeline
+    pipeline = build_pipeline(corpus, n_seq=args.seq, n_batch=args.batch)
+    print( "Using %i Documents and %i Words"%(len(corpus), len(weights)) )
     
+    print( "Initializing Model..." )
     ## initialize model
-    model = SimpleRNN(len(vocab), n_embed=256, n_hidden=256, n_layers=4, dropout=0.01)
+    config = {
+        "n_vocab": len(vocab),
+        "n_embed": args.embed,
+        "n_hidden": args.hidden,
+        "n_layers": args.layers,
+        "dropout": args.dropout,
+    }
+    model = SimpleRNN(**config)
+    ## count parameters
+    n_params = sum(np.prod(p.shape) for p in model.parameters())
+    print( "Using Model with %i Parameters"%n_params )
     
     ## train model
-    w = corpus_invfreq(dataset, sqrt=False)
-    logs = training(model, pipeline, w=w, lr=0.1, n_epochs=32, n_steps=256, verbose=True)
+    print( "Training..." )
+    kwargs = dict(n_epochs=args.epochs, n_steps=args.steps, verbose=args.verbose)
+    logs = training(model, pipeline, weights, lr=args.learning_rate, **kwargs)
     
     ## save model
-    save_model(model, logs, save_dir='movie_run_01/')
+    print( "Saving Model..." )
+    vocab['INDEX'] = index
+    metadata = dict(**config)
+    metadata['term_freq'] = args.term_freq
+    metadata['doc_freq'] = args.doc_freq
+    metadata['n_seq'] = args.seq
+    metadata['n_batch'] = args.batch
+    metadata['learning_rate'] = args.learning_rate
+    path = save_model(vocab, model, metadata, logs, args.save_dir)
+    print( "Model Saved to: %s"%path )
