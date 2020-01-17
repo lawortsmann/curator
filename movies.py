@@ -248,6 +248,10 @@ def training(model, pipeline, weights, lr=0.01, n_epochs=32, n_steps=64, verbose
 
 
 def save_model(vocab, model, metadata, logs, save_dir='movie_run/'):
+    ## ensure save_dir exists and is clean
+    if os.path.exists(save_dir):
+        os.rmdir(save_dir)
+    os.mkdir(save_dir)
     ## save vocab
     vocab = pd.DataFrame(vocab)
     vocab.to_csv(save_dir + 'vocab.csv')
@@ -282,8 +286,8 @@ if __name__ == "__main__":
     parser.add_argument('--batch', metavar='', type=int, default=1024, help='batch size')
     parser.add_argument('--steps', metavar='', type=int, default=256, help='steps per epoch')
     parser.add_argument('--epochs', metavar='', type=int, default=32, help='number of epochs')    
-    parser.add_argument('--missing', action='store_true', default=False, help='use a missing token')
-    parser.add_argument('--verbose', action='store_true', default=False, help='display status')
+    parser.add_argument('--missing', action='store_true', help='use a missing token')
+    parser.add_argument('--verbose', action='store_true', help='display status')
     args = parser.parse_args()
     
     if args.missing:

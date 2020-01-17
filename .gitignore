@@ -18,10 +18,8 @@ jjjjound/
 scripts/
 
 # runs
-run0/
-run1/
-run2/
-movie_run_01/
+curator_run*
+movie_run*
 
 # mac bullshit
 .DS_Store
