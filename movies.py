@@ -9,6 +9,7 @@ A simple RNN for modeling movie scripts.
 import numpy as np
 import pandas as pd
 from six.moves.urllib import request
+from sys import stdout
 from time import sleep
 import os, re
 import torch
@@ -37,18 +38,23 @@ def import_scripts(scripts, data_dir="scripts/", wait=True):
     """
     base_url = "https://www.imsdb.com/scripts/"
     for script in scripts:
-        print( script )
         ## wait
         if wait:
             sleep(1.0)
-        ## download
-        with request.urlopen(base_url + script + ".html") as page:
-            data = page.read()
-        ## parse
-        text = parse_script_text(data)
-        ## save
-        with open(data_dir + script + '.txt', 'w') as file:
-            file.write(text)
+        try:
+            ## download
+            with request.urlopen(base_url + script + ".html") as page:
+                data = page.read()
+            ## parse
+            text = parse_script_text(data)
+            assert len(text) >= 100
+            ## save
+            with open(data_dir + script + '.txt', 'w') as file:
+                file.write(text)
+        except Exception as err:
+            print( "Error:" )
+            print( script, err )
+            print( "======" )
     return True
 
 ## functions to load downloaded scripts
@@ -85,7 +91,7 @@ def build_vocab(dataset, min_count=1):
     Build Vocabulary
     """
     vocab, counts = np.unique(sum(dataset.values(), []), return_counts=True)
-    vocab = vocab[counts > min_count]
+    vocab = vocab[counts >= min_count]
     index = np.arange(len(vocab))
     vocab = pd.Series(index, index=vocab)
     res = dict()
@@ -164,12 +170,14 @@ class SimpleRNN(nn.Module):
         z = self.lin(z[0])
         z = self.act(z)
         return z
-    
-    
-def training(model, pipeline, w=None, lr=0.01, n_epochs=32, n_steps=64):
+
+
+def training(model, pipeline, w=None, lr=0.01, n_epochs=32, n_steps=64, verbose=True):
     """
     Training...
     """
+    ## set number of threads
+    torch.set_num_threads(10)
     ## initialize optimizer
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     ## initialize loss function
@@ -179,9 +187,8 @@ def training(model, pipeline, w=None, lr=0.01, n_epochs=32, n_steps=64):
         w = torch.tensor( np.array(w, dtype=np.float32) )
         nll_loss = nn.NLLLoss(weight=w)
     ## training loop
-    logs = []
+    logs, message = [], "Epoch %i [%s%s] %0.4f \r"
     for epoch in range(n_epochs):
-        print( "Epoch: %i"%(epoch + 1) )
         for i, (docs, x, y) in enumerate(pipeline):
             ## convert to tensors
             x = torch.tensor(x)
@@ -199,12 +206,35 @@ def training(model, pipeline, w=None, lr=0.01, n_epochs=32, n_steps=64):
                 'batch': i,
                 'loss': float(loss),
             })
-            ## stop
+            ## display progress
+            if verbose:
+                avg_loss = np.mean([h['loss'] for h in logs if h['epoch'] == epoch])
+                fill = int(round(50 * (i + 1) / n_steps))
+                mssg = message%(
+                    epoch + 1, fill * "=", (50 - fill) * " ", avg_loss
+                )
+                stdout.write(mssg)
+                stdout.flush()
+            ## next epoch
             if (i + 1) >= n_steps:
                 break
-    ## return model and logs
+        ## out of inner loop
+        if verbose:
+            avg_loss = np.mean([h['loss'] for h in logs if h['epoch'] == epoch])
+            print( message%(epoch + 1, 50 * "=", "", avg_loss) )
+    ## out of outer loop
     logs = pd.DataFrame(logs)
-    return model, logs
+    return logs
+
+
+def save_model(model, logs, save_dir='movie_run/'):
+    ## save logs
+    logs = pd.DataFrame(logs)
+    logs.to_csv(save_dir + 'logs.csv', index=False)
+    ## save model
+    with np.warnings.catch_warnings(record='ignore'):
+        torch.save(model, save_dir + 'model.pt')
+    return True
 
 
 if __name__ == "__main__":
@@ -217,17 +247,23 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     ## import data
+    scripts = pd.read_csv('scripts.csv')
+    scripts = list(scripts['name'])
     import_scripts(scripts, data_dir="scripts/")
     
     ## load data
-    scripts = load_scripts(data_dir="scripts/", tokenize=True)
-    vocab, dataset = build_vocab(scripts, min_count=1)
-    pipeline = dataset_generator(dataset, n_batch=64, n_seq=64)
+    scripts = load_scripts(data_dir='scripts/', tokenize=True)
+    vocab, dataset = build_vocab(scripts, min_count=10)
+    pipeline = dataset_generator(dataset, n_batch=1024, n_seq=32)
+    print( "using %i scripts"%len(scripts) )
+    print( "vocab size: %i"%len(vocab) )
     
     ## initialize model
-    model = SimpleRNN(len(vocab), n_embed=64, n_hidden=64, n_layers=4, dropout=0.25)
+    model = SimpleRNN(len(vocab), n_embed=256, n_hidden=256, n_layers=4, dropout=0.01)
     
     ## train model
-    w = corpus_invfreq(dataset, sqrt=True)
-    model, logs = training(model, pipeline, w=w, lr=0.1, n_epochs=16, n_steps=64)
-    hist = logs.groupby('epoch').mean()
+    w = corpus_invfreq(dataset, sqrt=False)
+    logs = training(model, pipeline, w=w, lr=0.1, n_epochs=32, n_steps=256, verbose=True)
+    
+    ## save model
+    save_model(model, logs, save_dir='movie_run_01/')
