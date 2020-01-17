@@ -11,11 +11,14 @@ __pycache__/
 *.csv
 *.h5
 *.zip
+*.txt
+*.pem
 wikiart/
 jjjjound/
-*.pem
+scripts/
 
 # runs
+run0/
 run1/
 run2/
 

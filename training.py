@@ -67,7 +67,7 @@ def vae_training(model, pipeline, original=None, verbose=True, n_epochs=64, n_st
             l_v = vae_loss(y, x, mu, logvar)
             l_g = gan_loss(p_x, p_y)
             l_p = reg_loss(p_p)
-            loss = l_v + l_g - l_p
+            loss = l_v + l_g - 0.1 * l_p
             ## step optimizer
             optimizer.zero_grad()
             loss.backward(retain_graph=True)

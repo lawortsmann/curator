@@ -106,7 +106,7 @@ class VAEGAN(nn.Module):
         self.psize = 2**int(np.log2(self.psize))
         params = params[:(3 * self.psize * self.psize)]
         self.portrait = params.reshape((1, 3, self.psize, self.psize))
-        self.portrait = nn.Sigmoid()(self.portrait)
+        self.portrait = nn.Sigmoid()(2.5 * self.portrait)
         self.portrait = (self.portrait - self.norm_m) / self.norm_s
         ## GAN classifier
         self.classifier = torchvision.models.resnet18(pretrained=True)
