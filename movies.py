@@ -3,7 +3,7 @@
 """
 A simple RNN for modeling movie scripts.
 
-@version: 2020-01-16
+@version: 2020-01-17
 @author: lawortsmann
 """
 import numpy as np
@@ -11,6 +11,7 @@ import pandas as pd
 from six.moves.urllib import request
 from sys import stdout
 from time import sleep
+from shutil import rmtree
 import json, os, re
 import torch
 from torch import nn
@@ -250,7 +251,7 @@ def training(model, pipeline, weights, lr=0.01, n_epochs=32, n_steps=64, verbose
 def save_model(vocab, model, metadata, logs, save_dir='movie_run/'):
     ## ensure save_dir exists and is clean
     if os.path.exists(save_dir):
-        os.rmdir(save_dir)
+        rmtree(save_dir)
     os.mkdir(save_dir)
     ## save vocab
     vocab = pd.DataFrame(vocab)
@@ -259,7 +260,7 @@ def save_model(vocab, model, metadata, logs, save_dir='movie_run/'):
     with np.warnings.catch_warnings(record='ignore'):
         torch.save(model, save_dir + 'model.pt')
     ## save metadata
-    with open(save_dir + 'metadata.json', 'w'):
+    with open(save_dir + 'metadata.json', 'w') as file:
         json.dump(metadata, file)
     ## save logs
     logs = pd.DataFrame(logs)
