@@ -248,6 +248,21 @@ def training(model, pipeline, weights, lr=0.01, n_epochs=32, n_steps=64, verbose
     return logs
 
 
+def evaluate_model(test, model, index, missing_ix=-1):
+    ## convert test phrase to sequence
+    seq = index.reindex(test.split(), fill_value=missing_ix)
+    seq = np.array(seq, dtype=int)
+    seq = torch.tensor(seq[seq >= 0, None])
+    ## evaluate model
+    with torch.no_grad():
+        pred = model(seq)
+    ## get prediction
+    pred = pd.Series(pred.numpy()[0], index=index.index)
+    pred = pred.sort_values(ascending=False)
+    pred = np.exp(pred)
+    return pred
+
+
 def save_model(vocab, model, metadata, logs, save_dir='movie_run/'):
     ## ensure save_dir exists and is clean
     if os.path.exists(save_dir):
@@ -281,12 +296,12 @@ if __name__ == "__main__":
     parser.add_argument('--embed', metavar='', type=int, default=256, help='embedding dimension')
     parser.add_argument('--hidden', metavar='', type=int, default=256, help='hidden dimension')
     parser.add_argument('--layers', metavar='', type=int, default=4, help='number of layers')
-    parser.add_argument('--dropout', metavar='', type=float, default=0.05, help='dropout rate between layers')
+    parser.add_argument('--dropout', metavar='', type=float, default=0.10, help='dropout rate between layers')
     parser.add_argument('--learning-rate', metavar='', type=float, default=1.0, help='learning rate')
     parser.add_argument('--seq', metavar='', type=int, default=32, help='sequence length')
     parser.add_argument('--batch', metavar='', type=int, default=1024, help='batch size')
     parser.add_argument('--steps', metavar='', type=int, default=256, help='steps per epoch')
-    parser.add_argument('--epochs', metavar='', type=int, default=32, help='number of epochs')    
+    parser.add_argument('--epochs', metavar='', type=int, default=256, help='number of epochs')    
     parser.add_argument('--missing', action='store_true', help='use a missing token')
     parser.add_argument('--verbose', action='store_true', help='display status')
     args = parser.parse_args()
