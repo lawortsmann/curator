@@ -20,6 +20,7 @@ For reference:
 import numpy as np
 import pandas as pd
 from sys import stdout
+from shutil import rmtree
 import json, os
 import torch
 from torch import nn
@@ -45,30 +46,35 @@ class CVAE(nn.Module):
         super(CVAE, self).__init__()
         ## VAE encoder
         self.encoder = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=4, stride=2),
+            nn.Conv2d(3, 32, kernel_size=8, stride=2),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.Conv2d(32, 64, kernel_size=8, stride=4),
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=4, stride=2),
+            nn.Conv2d(64, 128, kernel_size=8, stride=4),
             nn.ReLU(),
             nn.Conv2d(128, 256, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.Flatten()
+            nn.Flatten(),
+            nn.Linear(1024, 256),
+            nn.Tanh()
         )
         ## VAE bottleneck
-        self.lin_mu = nn.Linear(1024, 64)
-        self.lin_lv = nn.Linear(1024, 64)
+        self.lin_mu = nn.Linear(256, 64)
+        self.lin_lv = nn.Linear(256, 64)
         ## VAE decoder
         self.decoder = nn.Sequential(
             nn.Linear(64, 256),
+            nn.Tanh(),
             UnFlatten(),
             nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=4),
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
+            nn.ConvTranspose2d(64, 64, kernel_size=4, stride=4),
             nn.ReLU(),
-            nn.ConvTranspose2d(32, 3, kernel_size=2, stride=2),
+            nn.ConvTranspose2d(64, 32, kernel_size=8, stride=3),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 3, kernel_size=8, stride=2),
             nn.Sigmoid()
         )
     
@@ -85,7 +91,7 @@ class CVAE(nn.Module):
         eps = torch.randn_like(std)
         z = eps.mul(std).add_(z_mu)
         return z, z_mu, z_lv
-
+    
     def decode(self, z):
         """
         Decode pass
@@ -171,7 +177,7 @@ def vae_loss(x, y, z_mu, z_lv):
     return loss, bce, kld
 
 
-def training(model, pipeline, lr=0.01, n_epochs=32, verbose=True):
+def training(model, pipeline, lr=0.001, n_epochs=64, verbose=True):
     """
     Training...
     """
@@ -216,3 +222,62 @@ def training(model, pipeline, lr=0.01, n_epochs=32, verbose=True):
     ## out of outer loop
     logs = pd.DataFrame(logs)
     return logs
+
+
+def save_model(model, metadata, logs, save_dir='movie_run/'):
+    ## ensure save_dir exists and is clean
+    if os.path.exists(save_dir):
+        rmtree(save_dir)
+    os.mkdir(save_dir)
+    ## save model
+    with np.warnings.catch_warnings(record='ignore'):
+        torch.save(model, save_dir + 'model.pt')
+    ## save metadata
+    with open(save_dir + 'metadata.json', 'w') as file:
+        json.dump(metadata, file)
+    ## save logs
+    logs = pd.DataFrame(logs)
+    logs.to_csv(save_dir + 'logs.csv', index=False)
+    return save_dir
+
+
+if __name__ == "__main__":
+    from argparse import ArgumentParser
+    np.warnings.simplefilter(action='ignore')
+    
+    ## arguments
+    parser = ArgumentParser(description="Convolutional Variational Autoencoder")
+    parser.add_argument('--data-dir', metavar='', type=str, default='jjjjound/', help='data directory')
+    parser.add_argument('--save-dir', metavar='', type=str, default='curator_run/', help='save directory')
+    parser.add_argument('--learning-rate', metavar='', type=float, default=0.001, help='learning rate')
+    parser.add_argument('--n-batch', metavar='', type=int, default=64, help='batch size')
+    parser.add_argument('--batches', metavar='', type=int, default=256, help='batches per epoch')
+    parser.add_argument('--epochs', metavar='', type=int, default=64, help='number of epochs')    
+    parser.add_argument('--verbose', action='store_true', help='display status')
+    args = parser.parse_args()
+    
+    ## build data pipeline
+    print( "Loading Dataset..." )
+    kwargs = dict(size=256, n_workers=2)
+    pipeline = build_pipeline(args.data_dir, n_batch=args.n_batch, batches=args.batches, **kwargs)
+    
+    ## setup model
+    print( "Initializing Model..." )
+    model = CVAE()
+    n_params = sum(np.prod(p.shape) for p in model.parameters())
+    print( "Using Model with %i Parameters"%n_params )
+
+    ## train model
+    print( "Training..." )
+    kwargs = dict(lr=args.learning_rate, n_epochs=args.epochs, verbose=args.verbose)
+    logs = training(model, pipeline, **kwargs)
+    
+    ## save model
+    print( "Saving Model..." )
+    metadata = {
+        'data_dir': args.data_dir,
+        'learning_rate': args.learning_rate,
+        'n_batch': args.n_batch,
+    }
+    path = save_model(model, metadata, logs, args.save_dir)
+    print( "Model Saved to: %s"%path )
