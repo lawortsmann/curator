@@ -15,7 +15,7 @@ __pycache__/
 *.pem
 wikiart/
 jjjjound/
-scripts/
+pelaez/
 
 # runs
 curator_run*
